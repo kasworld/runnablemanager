@@ -14,41 +14,33 @@ package runnablemanager
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/kasworld/rangestat"
 )
 
 type RunnableI interface {
 	Run(ctx context.Context)
-	GetRunnableID() int
 }
 
 func (raman RunnableManager) String() string {
-	return fmt.Sprintf("RunnableManager[%v %v]",
-		raman.name,
-		raman.runStat)
+	return raman.runStat.String()
 }
 
 type RunnableManager struct {
 	name            string
 	concurrentCount int
 	waitStartCh     chan RunnableI
-	runnableList    []RunnableI
 	endedCh         chan RunnableI
 	runStat         *rangestat.RangeStat
-	logger          loggerI
 }
 
-func New(name string, concurrentCount int, logger loggerI) *RunnableManager {
+func New(name string, concurrentCount int) *RunnableManager {
 	raman := &RunnableManager{
 		name:            name,
 		concurrentCount: concurrentCount,
 		waitStartCh:     make(chan RunnableI, concurrentCount),
 		endedCh:         make(chan RunnableI, concurrentCount),
-		runnableList:    make([]RunnableI, concurrentCount),
 		runStat:         rangestat.New(name, 0, concurrentCount),
-		logger:          logger,
 	}
 	return raman
 }
@@ -62,20 +54,29 @@ func (raman *RunnableManager) Start(ctx context.Context) {
 					return
 				case ra, ok := <-raman.waitStartCh:
 					if !ok {
+						// fmt.Println("not ok")
 						return
 					}
 					if !raman.runStat.Inc() {
-						raman.logger.Fatal("fail to inc")
+						panic("fail to inc")
 					}
-					raman.runnableList[ra.GetRunnableID()] = ra
 					ra.Run(ctx)
 					if !raman.runStat.Dec() {
-						raman.logger.Fatal("fail to dec")
+						panic("fail to dec")
 					}
-					raman.runnableList[ra.GetRunnableID()] = nil
 					raman.endedCh <- ra
 				}
 			}
 		}()
 	}
+}
+
+func (raman *RunnableManager) GetWaitStartCh() chan<- RunnableI {
+	return raman.waitStartCh
+}
+func (raman *RunnableManager) GetEndedCh() <-chan RunnableI {
+	return raman.endedCh
+}
+func (raman *RunnableManager) GetRunStat() *rangestat.RangeStat {
+	return raman.runStat
 }

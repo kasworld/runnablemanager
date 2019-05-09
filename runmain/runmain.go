@@ -13,78 +13,40 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"time"
 
-	"github.com/kasworld/log/loggen/basiclog"
 	"github.com/kasworld/runnablemanager"
 )
 
 func main() {
-	Concurrent := 10
-	runningAI := runnablemanager.New(
-		"AI",
-		Concurrent,
-		basiclog.GlobalLogger)
+	runnableCount := 10
+	jobCount := runnableCount * 10
+	runningAI := runnablemanager.New("AI", runnableCount)
 
-	ctx := context.Background()
-	runningAI.Start(ctx)
-
-	startableWorkerIDQueue := make(chan int, Concurrent)
-	for i := 0; i < Concurrent; i++ {
-		startableWorkerIDQueue <- i
+	startableJobIDQueue := make(chan int, jobCount)
+	for i := 0; i < jobCount; i++ {
+		startableJobIDQueue <- i
 	}
+
+	ctx, ctxEnd := context.WithCancel(context.Background())
+
+	runningAI.Start(ctx)
 
 	printTicker := time.NewTicker(time.Second)
 	defer printTicker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
 
-		case <-printTicker.C:
-			basiclog.Debug("current %v", runningAI)
-
-		case ra := <-runningAI.GetEndedCh():
-			endedAI, ok := ra.(*AI)
-			if !ok {
-				basiclog.Fatal("Invalid AI obj %v", ra)
-				return
+	go func() {
+	loop1:
+		for {
+			select {
+			case <-ctx.Done():
+				break loop1
+			case jobID := <-startableJobIDQueue:
+				runningAI.GetWaitStartCh() <- NewAI(jobID)
 			}
-			// start next
-			startableWorkerIDQueue <- endedAI.GetRunnableID()
-
-		case workerid := <-startableWorkerIDQueue:
-			time.Sleep(time.Millisecond)
-			startingAI := NewAI(workerid)
-			runningAI.GetWaitStartCh() <- startingAI
 		}
-	}
-
-}
-
-type AI struct {
-	runnableid int
-	DoClose    func() `webformhide:"" stringformhide:""`
-}
-
-func NewAI(rid int) *AI {
-	return &AI{
-		runnableid: rid,
-		DoClose: func() {
-			basiclog.Fatal("Too early DoClose call %v", rid)
-		},
-	}
-}
-
-func (cai *AI) Run(mainctx context.Context) {
-	ctx, closeCtx := context.WithCancel(mainctx)
-	cai.DoClose = closeCtx
-	defer cai.DoClose()
-
-	timerInfoTk := time.NewTicker(time.Second)
-	defer timerInfoTk.Stop()
-	timerEndTk := time.NewTicker(time.Second * 1)
-	defer timerEndTk.Stop()
+	}()
 
 loop:
 	for {
@@ -92,14 +54,45 @@ loop:
 		case <-ctx.Done():
 			break loop
 
-		case <-timerInfoTk.C:
+		case <-printTicker.C:
+			fmt.Printf("current %v\n", runningAI)
 
-		case <-timerEndTk.C:
-			break loop
+		case ra := <-runningAI.GetEndedCh():
+			endedAI, ok := ra.(*AI)
+			if !ok {
+				panic(fmt.Sprintf("Invalid AI obj %v", ra))
+				break loop
+			}
+			fmt.Printf("job ended %v\n", endedAI)
+			// // enqueue
+			// startableJobIDQueue <- endedAI.jobID
+			if runningAI.GetRunStat().GetCurrentVal() == 0 {
+				break loop
+			}
 		}
+	}
+	ctxEnd()
+	fmt.Printf("current %v\n", runningAI)
+}
+
+type AI struct {
+	jobID   int
+	DoClose func() `webformhide:"" stringformhide:""`
+}
+
+func NewAI(wid int) *AI {
+	return &AI{
+		jobID: wid,
+		DoClose: func() {
+			panic(fmt.Sprintf("Too early DoClose call %v", wid))
+		},
 	}
 }
 
-func (cai *AI) GetRunnableID() int {
-	return cai.runnableid
+func (cai AI) String() string {
+	return fmt.Sprintf("AI-%v", cai.jobID)
+}
+
+func (cai *AI) Run(mainctx context.Context) {
+	time.Sleep(time.Second * 1)
 }
